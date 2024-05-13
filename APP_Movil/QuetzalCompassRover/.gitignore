@@ -37,3 +37,6 @@ yarn-error.*
 
 #- npm run android
 #- npm run web
+
+#Environment
+.env
