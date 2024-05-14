@@ -1,4 +1,3 @@
-
 import { StyleSheet } from "react-native";
 import MapScreen from "../screens/maps/map.js";
 import LoginScreen from "../screens/login/login.js";
@@ -11,7 +10,7 @@ export default function Navigation() {
   return (
     <NavigationContainer>
       <Stack.Navigator>
-      <Stack.Screen
+        <Stack.Screen
           name="Login"
           component={LoginScreen}
           options={{ title: "Quetzal Compass Rover" }}
