@@ -15,7 +15,7 @@ export default function MapScreen() {
   const [middleDestination, setMiddleDestination] = useState();
   const [destination, setDestination] = useState();
 
-  const GOOGLE_MAPS_APIKEY = "API_KEY";
+  const GOOGLE_MAPS_APIKEY = "GOOGLE_MAPS_APIKEY";
 
   return (
     <View style={styles.container}>
