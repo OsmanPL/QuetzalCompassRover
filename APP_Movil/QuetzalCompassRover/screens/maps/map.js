@@ -6,16 +6,45 @@ import { Marker } from "react-native-maps";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import MapViewDirections from "react-native-maps-directions";
 import { useState } from "react";
+import * as Location from "expo-location";
 
 export default function MapScreen() {
-  const [origin, setOrigin] = useState({
-    latitude: 14.640563,
-    longitude: -90.573826,
-  });
+  const [origin, setOrigin] = useState();
   const [middleDestination, setMiddleDestination] = useState();
   const [destination, setDestination] = useState();
 
+  const [regionDefault, setRegionDefault] = useState({
+    latitude: 14.624312, 
+    longitude: -90.565671,
+    latitudeDelta: 0.003,
+    longitudeDelta: 0.003,
+  });
+
   const GOOGLE_MAPS_APIKEY = "GOOGLE_MAPS_APIKEY";
+
+  async function getLocation() {
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") {
+      alert("Permission to access location was denied");
+      return;
+    }
+
+    let currentLocation = await Location.getCurrentPositionAsync({});
+    setOrigin({
+      latitude: currentLocation.coords.latitude,
+      longitude: currentLocation.coords.longitude,
+    });
+    setRegionDefault({
+      latitude: currentLocation.coords.latitude,
+      longitude: currentLocation.coords.longitude,
+      latitudeDelta: 0.003,
+      longitudeDelta: 0.003,
+    });
+  }
+
+  React.useEffect(() => {
+    getLocation();
+  }, []);
 
   return (
     <View style={styles.container}>
@@ -31,7 +60,12 @@ export default function MapScreen() {
                 longitude: details?.geometry?.location.lng,
               };
               setOrigin(originLocation);
-              console.log(data, details);
+              setRegionDefault({
+                latitude: details?.geometry?.location.lat,
+                longitude: details?.geometry?.location.lng,
+                latitudeDelta: 0.003,
+                longitudeDelta: 0.003,
+              });
             }}
             query={{
               key: GOOGLE_MAPS_APIKEY,
@@ -50,7 +84,6 @@ export default function MapScreen() {
                 longitude: details?.geometry?.location.lng,
               };
               setDestination(destinationLocation);
-              console.log(data, details);
             }}
             query={{
               key: GOOGLE_MAPS_APIKEY,
@@ -62,12 +95,7 @@ export default function MapScreen() {
       <MapView
         provider={PROVIDER_GOOGLE} // remove if not using Google Maps
         style={styles.map}
-        region={{
-          latitude: 14.587243,
-          longitude: -90.551465,
-          latitudeDelta: 0.003,
-          longitudeDelta: 0.003,
-        }}
+        region={regionDefault}
       >
         {origin != undefined ?<Marker coordinate={origin} />:null}
         {destination != undefined?<Marker coordinate={destination} />:null}
