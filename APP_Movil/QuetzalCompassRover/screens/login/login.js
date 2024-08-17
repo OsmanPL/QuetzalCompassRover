@@ -7,7 +7,7 @@ import {
   ImageBackground,
   StyleSheet,
 } from "react-native";
-import { Icon, Button } from "react-native-elements";
+import {  Button } from "react-native-elements";
 
 const image = {
   uri: "../../src/img/Logo.png",
