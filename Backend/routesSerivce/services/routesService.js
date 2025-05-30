@@ -1,146 +1,189 @@
+// Dependencies: `pathfinding`, `geolib`
+
 import { db } from "../config/config.js";
-import KDTree from "static-kdtree";
-import fetch from "node-fetch";
+import { getDistance } from "geolib";
+import PF from "pathfinding";
 
+let grafo = new Map();
 let paradas = [];
-let paradaMap = new Map();
-let tree = null;
+let idParadaMap = new Map();
 
-// --- UTILS ---
-function haversineDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371e3;
-  const toRad = x => x * Math.PI / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-}
-
-async function calcularDistanciaRealConCalles(origen, destino) {
-  try {
-    const url = `https://router.project-osrm.org/route/v1/foot/${origen.longitud},${origen.latitud};${destino.longitud},${destino.latitud}?overview=false`;
-    const response = await fetch(url);
-    const data = await response.json();
-    if (data.routes && data.routes.length > 0) {
-      return { distancia: data.routes[0].distance, duracion: data.routes[0].duration };
-    }
-  } catch (error) {
-    console.error("Error OSRM, usando haversine", error);
-  }
-  return { distancia: haversineDistance(origen.latitud, origen.longitud, destino.latitud, destino.longitud), duracion: null };
-}
-
-// --- DATA ---
-async function obtenerParadas() {
-  console.log("Cargando paradas desde base de datos...");
+export async function inicializarGrafo() {
+  console.log("Inicializando grafo de rutas...");
   const [result] = await db.query("CALL getParadas()");
-  console.log(`Paradas cargadas: ${result[0].length}`);
-  return result[0];
-}
+  paradas = result[0];
 
-function inicializarMapaParadas() {
-  paradaMap.clear();
-  paradas.forEach(p => {
-    paradaMap.set(p.id_Parada, p);
+  // Mapear parada por ID para acceso rápido
+  paradas.forEach((parada) => {
+    idParadaMap.set(parada.id_Parada.toString(), parada);
+    grafo.set(parada.id_Parada.toString(), []);
   });
-}
 
-function construirTree() {
-  const coords = paradas.map(p => [p.Latitud, p.Longitud]);
-  return new KDTree(coords);
-}
-
-// --- CORE ---
-async function encontrarRuta(origen, destino, modo) {
-  console.log("\n\u2728 Iniciando búsqueda de ruta completa...");
-
-  const origenIdxs = tree.knn([origen.latitud, origen.longitud], 5);
-  const destinoIdxs = tree.knn([destino.latitud, destino.longitud], 5);
-
-  const origenes = origenIdxs.map(idx => paradas[idx]);
-  const destinos = destinoIdxs.map(idx => paradas[idx]);
-
-  let mejorRuta = null;
-  let mejorCercania = Infinity;
-
-  for (const inicio of origenes) {
-    for (const fin of destinos) {
-
-      let trayecto = [];
-
-      trayecto.push({
-        transporte: "Caminar",
-        ruta: "Inicio",
-        Parada: inicio.Descripcion,
-        posicionParada: { latitud: origen.latitud, longitud: origen.longitud },
-        posicionSiguienteParada: { latitud: inicio.Latitud, longitud: inicio.Longitud }
+  // Conectar paradas por ruta secuencialmente
+  const rutas = agruparPorRuta(paradas);
+  rutas.forEach((paradasRuta) => {
+    for (let i = 0; i < paradasRuta.length - 1; i++) {
+      const origen = paradasRuta[i];
+      const destino = paradasRuta[i + 1];
+      grafo.get(origen.id_Parada.toString()).push({
+        id: destino.id_Parada.toString(),
+        modo: "ruta",
+        ruta: origen.Nombre_Ruta,
+        transporte: origen.TipoTransporte,
+        peso: 1,
       });
+    }
+  });
 
-      trayecto.push({
-        transporte: inicio.TipoTransporte,
-        ruta: inicio.Nombre_Ruta,
-        Parada: fin.Descripcion,
-        posicionParada: { latitud: inicio.Latitud, longitud: inicio.Longitud },
-        posicionSiguienteParada: { latitud: fin.Latitud, longitud: fin.Longitud }
-      });
-
-      const distanciaRestante = haversineDistance(fin.Latitud, fin.Longitud, destino.latitud, destino.longitud);
-
-      if (distanciaRestante < mejorCercania) {
-        mejorRuta = trayecto;
-        mejorCercania = distanciaRestante;
+  // Conectar paradas cercanas (menos de 1km)
+  for (let i = 0; i < paradas.length; i++) {
+    for (let j = i + 1; j < paradas.length; j++) {
+      const dist = getDistance(
+        { latitude: paradas[i].Latitud, longitude: paradas[i].Longitud },
+        { latitude: paradas[j].Latitud, longitude: paradas[j].Longitud }
+      );
+      if (dist <= 1000) {
+        const peso = dist / 100;
+        grafo.get(paradas[i].id_Parada.toString()).push({ id: paradas[j].id_Parada.toString(), modo: "caminar", peso });
+        grafo.get(paradas[j].id_Parada.toString()).push({ id: paradas[i].id_Parada.toString(), modo: "caminar", peso });
       }
     }
   }
 
-  if (!mejorRuta) throw new Error("No se pudo encontrar conexión entre origen y destino.");
-
-  // Agregar caminata final
-  const ultimaParada = mejorRuta[mejorRuta.length-1].posicionSiguienteParada;
-  const distanciaCalles = await calcularDistanciaRealConCalles(ultimaParada, destino);
-
-  mejorRuta.push({
-    transporte: "Caminar",
-    ruta: "Final hacia Destino",
-    Parada: "Final",
-    posicionParada: ultimaParada,
-    posicionSiguienteParada: { latitud: destino.latitud, longitud: destino.longitud },
-    distanciaRealCalles: distanciaCalles.distancia,
-    duracionEstimadaSegundos: distanciaCalles.duracion
-  });
-
-  console.log("\u2705 Ruta construida correctamente.");
-  return mejorRuta;
+  console.log("Grafo inicializado con:", grafo.size, "paradas");
 }
 
-// --- EXPORTS ---
-export const calcularRutaMasRapida = async (req, res) => {
+function agruparPorRuta(paradas) {
+  const rutas = new Map();
+  for (const parada of paradas) {
+    if (!rutas.has(parada.Nombre_Ruta)) {
+      rutas.set(parada.Nombre_Ruta, []);
+    }
+    rutas.get(parada.Nombre_Ruta).push(parada);
+  }
+  rutas.forEach((lista, ruta) => {
+    rutas.set(
+      ruta,
+      lista.sort((a, b) => a.id_Parada - b.id_Parada)
+    );
+  });
+  return rutas;
+}
+
+function encontrarParadaCercana(lat, lon) {
+  let minDist = Infinity;
+  let cercana = null;
+  for (const parada of paradas) {
+    const dist = getDistance({ latitude: lat, longitude: lon }, {
+      latitude: parada.Latitud,
+      longitude: parada.Longitud,
+    });
+    if (dist < minDist) {
+      minDist = dist;
+      cercana = parada;
+    }
+  }
+  return cercana;
+}
+
+export function generarRuta(origen, destino, modo = "Rapida") {
+  const start = encontrarParadaCercana(origen.latitud, origen.longitud);
+  const end = encontrarParadaCercana(destino.latitud, destino.longitud);
+
+  const nodos = Array.from(grafo.keys());
+  const distancias = new Map();
+  const anteriores = new Map();
+  const visitados = new Set();
+
+  nodos.forEach((id) => distancias.set(id, Infinity));
+  distancias.set(start.id_Parada.toString(), 0);
+
+  while (visitados.size < nodos.length) {
+    let nodoActual = null;
+    let menorDist = Infinity;
+    for (const [id, dist] of distancias.entries()) {
+      if (!visitados.has(id) && dist < menorDist) {
+        menorDist = dist;
+        nodoActual = id;
+      }
+    }
+    if (!nodoActual) break;
+    visitados.add(nodoActual);
+
+    for (const vecino of grafo.get(nodoActual)) {
+      const penalizacion = modo === "Segura" && vecino.modo === "caminar" ? vecino.peso * 5 : vecino.peso;
+      const nuevaDist = distancias.get(nodoActual) + penalizacion;
+      if (nuevaDist < distancias.get(vecino.id)) {
+        distancias.set(vecino.id, nuevaDist);
+        anteriores.set(vecino.id, nodoActual);
+      }
+    }
+  }
+
+  // Reconstruir camino
+  const ruta = [];
+  let actual = end.id_Parada.toString();
+  while (anteriores.has(actual)) {
+    const anterior = anteriores.get(actual);
+    const edge = grafo.get(anterior).find(e => e.id === actual);
+    ruta.unshift({
+      parada: idParadaMap.get(actual).Descripcion,
+      ruta: edge.ruta || "Caminar",
+      transporte: edge.modo === "caminar" ? "Caminar" : edge.transporte,
+      origen: {
+        latitud: idParadaMap.get(anterior).Latitud,
+        longitud: idParadaMap.get(anterior).Longitud,
+      },
+      destino: {
+        latitud: idParadaMap.get(actual).Latitud,
+        longitud: idParadaMap.get(actual).Longitud,
+      },
+    });
+    actual = anterior;
+  }
+
+  // Agregar tramo inicial a pie
+  ruta.unshift({
+    parada: `Caminando al punto de partida (${getDistance(
+      { latitude: origen.latitud, longitude: origen.longitud },
+      { latitude: start.Latitud, longitude: start.Longitud }
+    )}m)`,
+    ruta: "Caminar",
+    transporte: "Caminar",
+    origen,
+    destino: { latitud: start.Latitud, longitud: start.Longitud },
+  });
+
+  return ruta;
+}
+
+
+export async function calcularRutaRapida(req, res) {
   try {
     const { origen, destino } = req.body;
-    const ruta = await encontrarRuta(origen, destino, "rapida");
-    res.status(200).json(ruta);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error calculando ruta rápida" });
-  }
-};
+    if (!origen || !destino) {
+      return res.status(400).json({ error: "Faltan datos de origen o destino" });
+    }
 
-export const calcularRutaMasSegura = async (req, res) => {
+    const ruta = generarRuta(origen, destino, "Rapida");
+    return res.status(200).json({ ruta });
+  } catch (error) {
+    console.error("Error al calcular ruta rápida:", error);
+    return res.status(500).json({ error: "Error al calcular ruta rápida" });
+  }
+}
+
+export async function calcularRutaSegura(req, res) {
   try {
     const { origen, destino } = req.body;
-    const ruta = await encontrarRuta(origen, destino, "segura");
-    res.status(200).json(ruta);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error calculando ruta segura" });
-  }
-};
+    if (!origen || !destino) {
+      return res.status(400).json({ error: "Faltan datos de origen o destino" });
+    }
 
-export const inicializarGrafo = async () => {
-  console.log("\u2728 Inicializando datos de rutas...");
-  paradas = await obtenerParadas();
-  inicializarMapaParadas();
-  tree = construirTree();
-  console.log("\u2705 Grafo y KDTree listos.");
-};
+    const ruta = generarRuta(origen, destino, "Segura");
+    return res.status(200).json({ ruta });
+  } catch (error) {
+    console.error("Error al calcular ruta segura:", error);
+    return res.status(500).json({ error: "Error al calcular ruta segura" });
+  }
+}

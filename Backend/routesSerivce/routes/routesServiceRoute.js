@@ -1,12 +1,12 @@
 import { Router } from "express";
 import {
-    calcularRutaMasRapida,
-    calcularRutaMasSegura,
+    calcularRutaRapida,
+    calcularRutaSegura,
   } from "../services/routesService.js";
 
 const router = Router();
 
-router.post("/Rapida", calcularRutaMasRapida);
-router.post("/Segura", calcularRutaMasSegura);
+router.post("/Rapida", calcularRutaRapida);
+router.post("/Segura", calcularRutaSegura);
 
 export default router;
