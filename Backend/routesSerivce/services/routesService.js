@@ -1,5 +1,3 @@
-// Dependencies: `pathfinding`, `geolib`
-
 import { db } from "../config/config.js";
 import { getDistance } from "geolib";
 import PF from "pathfinding";
@@ -152,6 +150,18 @@ export function generarRuta(origen, destino, modo = "Rapida") {
     transporte: "Caminar",
     origen,
     destino: { latitud: start.Latitud, longitud: start.Longitud },
+  });
+
+  // Agregar tramo final a pie
+  ruta.push({
+    parada: `Caminando al destino (${getDistance(
+      { latitude: destino.latitud, longitude: destino.longitud },
+      { latitude: end.Latitud, longitude: end.Longitud }
+    )}m)`,
+    ruta: "Caminar",
+    transporte: "Caminar",
+    origen: { latitud: end.Latitud, longitud: end.Longitud },
+    destino,
   });
 
   return ruta;
