@@ -1,6 +1,48 @@
-import { db } from "../config/config.js";
+import { db, GOOGLE_MAPS_API_KEY } from "../config/config.js";
 import { getDistance } from "geolib";
-import PF from "pathfinding";
+import fetch from "node-fetch";
+
+// Velocidades promedio (m/s)
+const WALK_SPEED_MPS = 1.33; // ~4.8 km/h
+const VEHICLE_SPEED_MPS = 6.94; // ~25 km/h como aproximación urbana
+// Penalizaciones de modo Seguro
+const WALK_PENALTY_FACTOR = 5.0; // evitar caminar
+const CAMIONETA_PENALTY_FACTOR = 2.0; // evitar Camioneta
+
+class MinHeap {
+  constructor() { this.a = []; }
+  push(x) {
+    this.a.push(x);
+    this._siftUp(this.a.length - 1);
+  }
+  pop() {
+    if (this.a.length === 0) return null;
+    const top = this.a[0];
+    const last = this.a.pop();
+    if (this.a.length) { this.a[0] = last; this._siftDown(0); }
+    return top;
+  }
+  _siftUp(i) {
+    while (i > 0) {
+      const p = Math.floor((i - 1) / 2);
+      if (this.a[p].dist <= this.a[i].dist) break;
+      [this.a[p], this.a[i]] = [this.a[i], this.a[p]];
+      i = p;
+    }
+  }
+  _siftDown(i) {
+    const n = this.a.length;
+    while (true) {
+      let l = 2 * i + 1, r = 2 * i + 2, m = i;
+      if (l < n && this.a[l].dist < this.a[m].dist) m = l;
+      if (r < n && this.a[r].dist < this.a[m].dist) m = r;
+      if (m === i) break;
+      [this.a[m], this.a[i]] = [this.a[i], this.a[m]];
+      i = m;
+    }
+  }
+  get size() { return this.a.length; }
+}
 
 let grafo = new Map();
 let paradas = [];
@@ -10,7 +52,6 @@ export async function inicializarGrafo() {
   console.log("Inicializando grafo de rutas...");
   const [result] = await db.query("CALL getParadas()");
   paradas = result[0];
-
   idParadaMap.clear();
   grafo.clear();
 
@@ -26,12 +67,19 @@ export async function inicializarGrafo() {
     for (let i = 0; i < paradasRuta.length - 1; i++) {
       const origen = paradasRuta[i];
       const destino = paradasRuta[i + 1];
+      const dist = getDistance(
+        { latitude: origen.Latitud, longitude: origen.Longitud },
+        { latitude: destino.Latitud, longitude: destino.Longitud }
+      );
+      const timeSec = dist / VEHICLE_SPEED_MPS;
       grafo.get(origen.id_Parada.toString()).push({
         id: destino.id_Parada.toString(),
         modo: "ruta",
         ruta: origen.Nombre_Ruta,
         transporte: origen.TipoTransporte,
         peso: 1,
+        distanceMeters: dist,
+        timeSec,
       });
     }
   });
@@ -45,15 +93,20 @@ export async function inicializarGrafo() {
       );
       if (dist <= 1000) {
         const peso = dist / 100;
+        const timeSec = dist / WALK_SPEED_MPS;
         grafo.get(paradas[i].id_Parada.toString()).push({
           id: paradas[j].id_Parada.toString(),
           modo: "caminar",
           peso,
+          distanceMeters: dist,
+          timeSec,
         });
         grafo.get(paradas[j].id_Parada.toString()).push({
           id: paradas[i].id_Parada.toString(),
           modo: "caminar",
           peso,
+          distanceMeters: dist,
+          timeSec,
         });
       }
     }
@@ -95,6 +148,57 @@ function encontrarParadaCercana(lat, lon) {
   return cercana;
 }
 
+function costForEdge(edge, modo) {
+  const baseTime = edge.timeSec ?? (edge.distanceMeters
+    ? edge.distanceMeters / (edge.modo === "caminar" ? WALK_SPEED_MPS : VEHICLE_SPEED_MPS)
+    : 1);
+
+  if (modo === "Rapida" || modo === "Tiempo") {
+    // Minimiza el tiempo total
+    return baseTime;
+  }
+  if (modo === "Segura") {
+    // Minimiza tiempo con penalizaciones a caminar y Camioneta
+    let factor = 1;
+    if (edge.modo === "caminar") factor *= WALK_PENALTY_FACTOR;
+    const t = (edge.transporte || "").toString().toLowerCase();
+    if (t === "camioneta") factor *= CAMIONETA_PENALTY_FACTOR;
+    return baseTime * factor;
+  }
+  // Fallback: métrica antigua
+  return edge.peso ?? 1;
+}
+
+function dijkstra(startId, endId, modo) {
+  const dist = new Map();
+  const prev = new Map();
+  const visited = new Set();
+  const pq = new MinHeap();
+
+  for (const id of grafo.keys()) dist.set(id, Infinity);
+  dist.set(startId, 0);
+  pq.push({ id: startId, dist: 0 });
+
+  while (pq.size) {
+    const { id: u, dist: du } = pq.pop();
+    if (visited.has(u)) continue;
+    visited.add(u);
+    if (u === endId) break;
+    const neighbors = grafo.get(u) || [];
+    for (const edge of neighbors) {
+      const v = edge.id;
+      const w = costForEdge(edge, modo);
+      const alt = du + w;
+      if (alt < (dist.get(v) ?? Infinity)) {
+        dist.set(v, alt);
+        prev.set(v, u);
+        pq.push({ id: v, dist: alt });
+      }
+    }
+  }
+  return { dist, prev };
+}
+
 // --- helper para empaquetar info de parada (si existe) ---
 function paradaInfo(parada) {
   if (!parada) return null;
@@ -111,46 +215,15 @@ function paradaInfo(parada) {
 export function generarRuta(origen, destino, modo = "Rapida") {
   const start = encontrarParadaCercana(origen.latitud, origen.longitud);
   const end = encontrarParadaCercana(destino.latitud, destino.longitud);
-
-  const nodos = Array.from(grafo.keys());
-  const distancias = new Map();
-  const anteriores = new Map();
-  const visitados = new Set();
-
-  nodos.forEach((id) => distancias.set(id, Infinity));
-  distancias.set(start.id_Parada.toString(), 0);
-
-  // Dijkstra simple
-  while (visitados.size < nodos.length) {
-    let nodoActual = null;
-    let menorDist = Infinity;
-    for (const [id, dist] of distancias.entries()) {
-      if (!visitados.has(id) && dist < menorDist) {
-        menorDist = dist;
-        nodoActual = id;
-      }
-    }
-    if (!nodoActual) break;
-    visitados.add(nodoActual);
-
-    for (const vecino of grafo.get(nodoActual)) {
-      const penalizacion =
-        modo === "Segura" && vecino.modo === "caminar"
-          ? vecino.peso * 5
-          : vecino.peso;
-      const nuevaDist = distancias.get(nodoActual) + penalizacion;
-      if (nuevaDist < distancias.get(vecino.id)) {
-        distancias.set(vecino.id, nuevaDist);
-        anteriores.set(vecino.id, nodoActual);
-      }
-    }
-  }
+  const startId = start.id_Parada.toString();
+  const endId = end.id_Parada.toString();
+  const { prev } = dijkstra(startId, endId, modo);
 
   // Reconstruir camino de paradas (de end hacia start)
   const ruta = [];
-  let actual = end.id_Parada.toString();
-  while (anteriores.has(actual)) {
-    const anterior = anteriores.get(actual);
+  let actual = endId;
+  while (prev.has(actual)) {
+    const anterior = prev.get(actual);
     const edge = grafo.get(anterior).find((e) => e.id === actual);
 
     const paradaOrigenObj = idParadaMap.get(anterior);
@@ -220,6 +293,66 @@ export function generarRuta(origen, destino, modo = "Rapida") {
   return ruta;
 }
 
+function formatDuration(totalSec) {
+  const s = Math.max(0, Math.round(totalSec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${ss}s`;
+}
+
+async function googleDirectionsDurationSec({ o, d, mode }) {
+  const origin = `${o.latitud},${o.longitud}`;
+  const dest = `${d.latitud},${d.longitud}`;
+  const params = new URLSearchParams({
+    origin,
+    destination: dest,
+    mode: mode === "walking" ? "walking" : "driving",
+    key: GOOGLE_MAPS_API_KEY,
+  });
+  if (mode !== "walking") params.set("departure_time", "now");
+  const url = `https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`;
+  try {
+    const res = await fetch(url);
+    const json = await res.json();
+    if (json.status !== "OK" || !Array.isArray(json.routes) || json.routes.length === 0) return null;
+    const route = json.routes[0];
+    const legs = Array.isArray(route.legs) ? route.legs : [];
+    let total = 0;
+    for (const leg of legs) {
+      const dur = mode !== "walking" ? (leg.duration_in_traffic?.value ?? leg.duration?.value) : leg.duration?.value;
+      if (typeof dur === "number") total += dur;
+    }
+    return total > 0 ? total : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function annotateRouteWithTimes(ruta) {
+  let total = 0;
+  for (const seg of ruta) {
+    const dist = getDistance(
+      { latitude: seg.origen.latitud, longitude: seg.origen.longitud },
+      { latitude: seg.destino.latitud, longitude: seg.destino.longitud }
+    );
+    seg.distancia_metros = dist;
+    let tiempoSeg = 0;
+    if (seg.transporte === "Caminar") {
+      tiempoSeg = dist / WALK_SPEED_MPS;
+    } else {
+      const g = await googleDirectionsDurationSec({ o: seg.origen, d: seg.destino, mode: "driving" });
+      if (typeof g === "number" && g > 0) tiempoSeg = g; else tiempoSeg = dist / VEHICLE_SPEED_MPS;
+    }
+    seg.tiempo_segundos = Math.round(tiempoSeg);
+    seg.tiempo_texto = formatDuration(seg.tiempo_segundos);
+    total += seg.tiempo_segundos;
+  }
+  return { ruta: ruta, total_tiempo_segundos: total, total_tiempo_texto: formatDuration(total) };
+}
+
 export async function calcularRutaRapida(req, res) {
   try {
     const { origen, destino } = req.body;
@@ -227,7 +360,8 @@ export async function calcularRutaRapida(req, res) {
       return res.status(400).json({ error: "Faltan datos de origen o destino" });
     }
     const ruta = generarRuta(origen, destino, "Rapida");
-    return res.status(200).json({ ruta });
+    const tiempos = await annotateRouteWithTimes(ruta);
+    return res.status(200).json(tiempos);
   } catch (error) {
     console.error("Error al calcular ruta rápida:", error);
     return res.status(500).json({ error: "Error al calcular ruta rápida" });
@@ -241,9 +375,25 @@ export async function calcularRutaSegura(req, res) {
       return res.status(400).json({ error: "Faltan datos de origen o destino" });
     }
     const ruta = generarRuta(origen, destino, "Segura");
-    return res.status(200).json({ ruta });
+    const tiempos = await annotateRouteWithTimes(ruta);
+    return res.status(200).json(tiempos);
   } catch (error) {
     console.error("Error al calcular ruta segura:", error);
     return res.status(500).json({ error: "Error al calcular ruta segura" });
+  }
+}
+
+export async function calcularRutaTiempo(req, res) {
+  try {
+    const { origen, destino } = req.body;
+    if (!origen || !destino) {
+      return res.status(400).json({ error: "Faltan datos de origen o destino" });
+    }
+    const ruta = generarRuta(origen, destino, "Tiempo");
+    const tiempos = await annotateRouteWithTimes(ruta);
+    return res.status(200).json(tiempos);
+  } catch (error) {
+    console.error("Error al calcular ruta por tiempo:", error);
+    return res.status(500).json({ error: "Error al calcular ruta por tiempo" });
   }
 }
