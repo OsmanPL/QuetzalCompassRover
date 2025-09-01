@@ -22,6 +22,36 @@ const isValidCoord = (p) =>
 const sanitizeCoordsArray = (arr) =>
   Array.isArray(arr) ? arr.filter(isValidCoord) : [];
 
+// Distancia Haversine aproximada en metros
+function haversine(a, b) {
+  if (!isValidCoord(a) || !isValidCoord(b)) return Infinity;
+  const R = 6371000;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLng = toRad(b.longitude - a.longitude);
+  const lat1 = toRad(a.latitude);
+  const lat2 = toRad(b.latitude);
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  const c = 2 * Math.asin(
+    Math.sqrt(sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng)
+  );
+  return R * c;
+}
+
+function closestPointIndex(coords = [], p) {
+  if (!Array.isArray(coords) || coords.length === 0 || !isValidCoord(p)) return -1;
+  let bestIdx = 0;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < coords.length; i++) {
+    const d = haversine(coords[i], p);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 // Rumbo (bearing) de p1 a p2
 function bearing(p1, p2) {
   const φ1 = toRad(p1.latitude);
@@ -172,6 +202,17 @@ export default function MapScreen() {
   const [segments, setSegments] = useState([]);   // <- ahora viene con parada_origen/parada_destino
   const [loadingRoute, setLoadingRoute] = useState(false);
 
+  // Ubicación del usuario (opt-in)
+  const [locationEnabled, setLocationEnabled] = useState(false);
+  const [hasLocationPermission, setHasLocationPermission] = useState(false);
+  const [userPos, setUserPos] = useState(null);
+  const locationWatchRef = useRef(null);
+  const [showTraffic, setShowTraffic] = useState(true);
+  const [routeTimeMin, setRouteTimeMin] = useState(null);
+  const [routeDistanceKm, setRouteDistanceKm] = useState(null);
+  const [routeRemainingKm, setRouteRemainingKm] = useState(null);
+  const [selectMode, setSelectMode] = useState('none'); // 'none' | 'origin' | 'destination'
+
   // Polilíneas por segmento (idx -> coordinates[])
   const [polyBySeg, setPolyBySeg] = useState({});
   const PREPEND_EXACT_ORIGIN = true;
@@ -216,8 +257,8 @@ export default function MapScreen() {
     return dict;
   }, []);
 
-  const GOOGLE_MAPS_APIKEY = "API_KEY";
-  const API_URL = "API_BACKEND";
+  const GOOGLE_MAPS_APIKEY = "YOUR_GOOGLE_MAPS_API_KEY_HERE"; // <- Pon aquí tu API Key de Google Maps
+  const API_URL = "API_BACKEND_URL_HERE"; // <- Pon aquí la URL de tu backend
 
   /* Ubicación inicial */
   useEffect(() => {
@@ -242,16 +283,65 @@ export default function MapScreen() {
     })();
   }, []);
 
+  // Helpers para manejo de permiso/seguimiento de ubicación
+  const ensureLocationPermission = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      const granted = status === "granted";
+      setHasLocationPermission(granted);
+      if (!granted) Alert.alert("Ubicación", "Se requiere permiso para mostrar tu ubicación.");
+      return granted;
+    } catch (e) {
+      console.log("request permission error", e);
+      return false;
+    }
+  };
+
+  const startLocationWatch = async () => {
+    if (!hasLocationPermission || locationWatchRef.current) return;
+    try {
+      const sub = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          distanceInterval: 5,
+          timeInterval: 2000,
+        },
+        (loc) => {
+          const p = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+          setUserPos(p);
+          setOrigin((prev) => prev || p);
+        }
+      );
+      locationWatchRef.current = sub;
+    } catch (e) {
+      console.log("watchPosition error", e);
+    }
+  };
+
+  const stopLocationWatch = async () => {
+    try {
+      const sub = locationWatchRef.current;
+      if (sub && typeof sub.remove === "function") sub.remove();
+    } catch {}
+    locationWatchRef.current = null;
+  };
+
   const centerOnMyLocation = async () => {
     try {
-      const loc = await Location.getCurrentPositionAsync({});
+      let granted = hasLocationPermission;
+      if (!granted) granted = await ensureLocationPermission();
+      if (!granted) return;
+      setLocationEnabled(true);
+      await startLocationWatch();
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const region = {
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       };
-      setOrigin({ latitude: region.latitude, longitude: region.longitude });
+      setUserPos({ latitude: region.latitude, longitude: region.longitude });
+      setOrigin((prev) => prev || { latitude: region.latitude, longitude: region.longitude });
       if (mapRef.current) mapRef.current.animateToRegion(region, 500);
     } catch (e) {
       Alert.alert("Ubicación", "No se pudo obtener tu ubicación.");
@@ -299,6 +389,26 @@ export default function MapScreen() {
         hasNumber(s?.destino?.longitud)
       );
       setSegments(cleaned);
+
+      // Extrae tiempo estimado desde tu API si está disponible
+      let apiMinutes = null;
+      const maybeNumbers = [
+        data?.tiempoMinutos,
+        data?.tiempo_minutos,
+        data?.tiempo_total_minutos,
+        data?.duracionMinutos,
+        data?.duracion_minutos,
+        data?.minutos,
+      ];
+      for (const v of maybeNumbers) { if (hasNumber(v)) { apiMinutes = v; break; } }
+      if (apiMinutes == null) {
+        // Intenta sumar por segmentos si traen duración por tramo
+        const sumSegMin = (cleaned || []).reduce((acc, s) =>
+          acc + (s?.tiempoMin || s?.tiempo_min || s?.duracionMinutos || s?.duracion_minutos || 0)
+        , 0);
+        if (sumSegMin > 0) apiMinutes = sumSegMin;
+      }
+      setRouteTimeMin(apiMinutes ?? null);
     } catch (e) {
       console.error("Ruta rápida error:", e);
       Alert.alert("Ruta", "No se pudo obtener la ruta.");
@@ -392,6 +502,130 @@ export default function MapScreen() {
     }
   }, [polyBySeg]);
 
+  // Distancia total de la ruta (sumando cada polyline de segmento)
+  useEffect(() => {
+    const segs = polyBySeg || {};
+    let total = 0;
+    for (const k of Object.keys(segs)) {
+      const coords = sanitizeCoordsArray(segs[k]);
+      for (let i = 1; i < coords.length; i++) {
+        total += haversine(coords[i - 1], coords[i]);
+      }
+    }
+    setRouteDistanceKm(total > 0 ? total / 1000 : null);
+  }, [polyBySeg]);
+
+  // Distancia restante basada en polilíneas vivas (recortadas)
+  useEffect(() => {
+    const source = (livePolys && Object.keys(livePolys).length > 0) ? livePolys : polyBySeg;
+    const segs = source || {};
+    let total = 0;
+    for (const k of Object.keys(segs)) {
+      const coords = sanitizeCoordsArray(segs[k]);
+      for (let i = 1; i < coords.length; i++) {
+        total += haversine(coords[i - 1], coords[i]);
+      }
+    }
+    setRouteRemainingKm(total > 0 ? total / 1000 : null);
+  }, [livePolys, polyBySeg]);
+
+  // Botón: centrar en la ruta actual pintada
+  const centerOnRoute = () => {
+    const source = (livePolys && Object.keys(livePolys).length > 0) ? livePolys : polyBySeg;
+    const vals = Object.values(source || {});
+    const allCoords = sanitizeCoordsArray(vals.flat ? vals.flat() : [].concat(...vals));
+    if (allCoords.length > 1 && mapRef.current) {
+      mapRef.current.fitToCoordinates(allCoords, {
+        edgePadding: { top: 80, right: 80, bottom: 120, left: 80 },
+        animated: true,
+      });
+    } else if (isValidCoord(origin) && isValidCoord(destination) && mapRef.current) {
+      mapRef.current.fitToCoordinates([origin, destination], {
+        edgePadding: { top: 80, right: 80, bottom: 120, left: 80 },
+        animated: true,
+      });
+    } else if (isValidCoord(origin) && mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: origin.latitude,
+        longitude: origin.longitude,
+        latitudeDelta: regionDefault.latitudeDelta,
+        longitudeDelta: regionDefault.longitudeDelta,
+      }, 500);
+    }
+  };
+
+  // Centrar el mapa cuando haya origen y destino seleccionados (aunque no haya ruta aún)
+  useEffect(() => {
+    if (isValidCoord(origin) && isValidCoord(destination) && mapRef.current) {
+      mapRef.current.fitToCoordinates([origin, destination], {
+        edgePadding: { top: 80, right: 80, bottom: 120, left: 80 },
+        animated: true,
+      });
+    }
+  }, [origin, destination]);
+
+  // Ruta en vivo: recorta los tramos ya recorridos por el usuario
+  const [livePolys, setLivePolys] = useState({});
+
+  useEffect(() => {
+    if (!userPos || !polyBySeg || Object.keys(polyBySeg).length === 0) {
+      setLivePolys(polyBySeg || {});
+      return;
+    }
+
+    const keys = Object.keys(polyBySeg)
+      .map((k) => Number(k))
+      .sort((a, b) => a - b);
+    const segStarts = {};
+    let combined = [];
+    for (const k of keys) {
+      const arr = sanitizeCoordsArray(polyBySeg[k]);
+      segStarts[k] = combined.length;
+      combined = combined.concat(arr);
+    }
+    if (combined.length < 2) {
+      setLivePolys(polyBySeg);
+      return;
+    }
+
+    const globalIdx = closestPointIndex(combined, userPos);
+    const PROXIMITY_M = 80;
+    const nearestDist = haversine(combined[globalIdx], userPos);
+
+    const updated = {};
+    for (const k of keys) {
+      const start = segStarts[k];
+      const arr = sanitizeCoordsArray(polyBySeg[k]);
+      const end = start + arr.length; // exclusivo
+
+      if (nearestDist <= PROXIMITY_M) {
+        if (globalIdx >= end) {
+          updated[k] = [];
+        } else if (globalIdx <= start) {
+          updated[k] = arr;
+        } else {
+          const cut = Math.max(0, globalIdx - start);
+          updated[k] = arr.slice(cut);
+        }
+      } else {
+        updated[k] = arr;
+      }
+    }
+    setLivePolys(updated);
+  }, [userPos, polyBySeg]);
+
+  // Inicia/detiene el watcher según preferencia del usuario
+  useEffect(() => {
+    (async () => {
+      if (locationEnabled && hasLocationPermission) {
+        await startLocationWatch();
+      } else {
+        await stopLocationWatch();
+      }
+    })();
+    return () => { /* cleanup handled in stopLocationWatch */ };
+  }, [locationEnabled, hasLocationPermission]);
+
   /* ========= NUEVO: lista de PARADAS ÚNICAS (para no repetir marcadores) ========= */
   const uniqueStops = useMemo(() => {
     const byKey = new Map();
@@ -431,7 +665,7 @@ export default function MapScreen() {
             debounce={200}
             timeout={15000}
             keyboardShouldPersistTaps="handled"
-            query={{ key: GOOGLE_MAPS_APIKEY, language: "es" }}
+            query={{ key: GOOGLE_MAPS_APIKEY, language: "es", components: "country:gt" }}
             predefinedPlaces={[]}
             predefinedPlacesAlwaysVisible={false}
             onFail={(e) => console.log("[Places Origen onFail]", e?.message || e)}
@@ -486,7 +720,7 @@ export default function MapScreen() {
             debounce={200}
             timeout={15000}
             keyboardShouldPersistTaps="handled"
-            query={{ key: GOOGLE_MAPS_APIKEY, language: "es" }}
+            query={{ key: GOOGLE_MAPS_APIKEY, language: "es", components: "country:gt" }}
             predefinedPlaces={[]}
             predefinedPlacesAlwaysVisible={false}
             onFail={(e) => console.log("[Places Destino onFail]", e?.message || e)}
@@ -546,6 +780,40 @@ export default function MapScreen() {
         <Text style={styles.locBtnText}>Mi ubicación</Text>
       </TouchableOpacity>
 
+      <TouchableOpacity style={styles.routeBtn} onPress={centerOnRoute}>
+        <Text style={styles.routeBtnText}>Centrar ruta</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.stopLocBtn}
+        onPress={async () => { setLocationEnabled(false); await stopLocationWatch(); }}
+      >
+        <Text style={styles.stopLocBtnText}>Detener ubicación</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.trafficBtn}
+        onPress={() => setShowTraffic((v) => !v)}
+      >
+        <Text style={styles.trafficBtnText}>
+          {showTraffic ? "Ocultar Trafico" : "Mostrar Trafico"}
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.selectBtn, selectMode === 'origin' && styles.selectBtnActive]}
+        onPress={() => setSelectMode((m) => (m === 'origin' ? 'none' : 'origin'))}
+      >
+        <Text style={styles.selectBtnText}>{selectMode === 'origin' ? 'Tap para ORIGEN' : 'Poner Origen'}</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.selectBtn, styles.selectBtnBelow, selectMode === 'destination' && styles.selectBtnActive]}
+        onPress={() => setSelectMode((m) => (m === 'destination' ? 'none' : 'destination'))}
+      >
+        <Text style={styles.selectBtnText}>{selectMode === 'destination' ? 'Tap para DESTINO' : 'Poner Destino'}</Text>
+      </TouchableOpacity>
+
       {/* Mapa */}
       <MapView
         ref={mapRef}
@@ -553,6 +821,44 @@ export default function MapScreen() {
         style={styles.map}
         initialRegion={regionDefault}
         showsMyLocationButton
+        showsUserLocation={!!locationEnabled && !!hasLocationPermission}
+        showsTraffic={!!showTraffic}
+        onPress={(e) => {
+          try {
+            const c = e?.nativeEvent?.coordinate;
+            if (!isValidCoord(c)) return;
+            let placed = false;
+            if (selectMode === 'origin' || (selectMode === 'none' && !isValidCoord(origin))) {
+              setOrigin(c);
+              placed = true;
+            } else if (selectMode === 'destination' || (selectMode === 'none' && !isValidCoord(destination))) {
+              setDestination(c);
+              placed = true;
+            } else {
+              // Si ambos existen y no hay modo, mover destino por defecto
+              setDestination(c);
+              placed = true;
+            }
+            if (placed) {
+              setSelectMode('none');
+              if (mapRef.current) {
+                if (isValidCoord(origin) && isValidCoord(destination)) {
+                  mapRef.current.fitToCoordinates([origin, destination], {
+                    edgePadding: { top: 80, right: 80, bottom: 120, left: 80 },
+                    animated: true,
+                  });
+                } else {
+                  mapRef.current.animateToRegion({
+                    latitude: c.latitude,
+                    longitude: c.longitude,
+                    latitudeDelta: regionDefault.latitudeDelta,
+                    longitudeDelta: regionDefault.longitudeDelta,
+                  }, 400);
+                }
+              }
+            }
+          } catch {}
+        }}
       >
         {isValidCoord(origin) && <Marker coordinate={origin} title="Origen" />}
         {isValidCoord(destination) && <Marker coordinate={destination} title="Destino" />}
@@ -565,7 +871,7 @@ export default function MapScreen() {
             if (!isValidCoord(o) || !isValidCoord(d)) return null;
 
             const { strokeColor } = styleForTransport(seg?.transporte);
-            const coords = sanitizeCoordsArray(polyBySeg[idx]);
+            const coords = sanitizeCoordsArray(livePolys[idx] ?? polyBySeg[idx]);
 
             return (
               <Polyline
@@ -617,6 +923,18 @@ export default function MapScreen() {
           <ActivityIndicator size="large" />
         </View>
       )}
+
+      {(routeTimeMin != null || routeDistanceKm != null || routeRemainingKm != null) && (
+        <View style={styles.infoBadge}>
+          <Text style={styles.infoBadgeText}>
+            {routeTimeMin != null ? `Tiempo estimado: ${Math.round(routeTimeMin)} min` : ''}
+            {(routeTimeMin != null && (routeDistanceKm != null || routeRemainingKm != null)) ? ' • ' : ''}
+            {routeDistanceKm != null ? `Distancia: ${routeDistanceKm.toFixed(1)} km` : ''}
+            {(routeDistanceKm != null && routeRemainingKm != null) ? ' • ' : (routeTimeMin == null && routeRemainingKm != null && routeDistanceKm == null ? '' : '')}
+            {routeRemainingKm != null ? `Restante: ${routeRemainingKm.toFixed(1)} km` : ''}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -665,6 +983,68 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   locBtnText: { color: "#000", fontWeight: "bold" },
+  stopLocBtn: {
+    position: "absolute",
+    top: 180,
+    right: 10,
+    height: 40,
+    paddingHorizontal: 12,
+    backgroundColor: "#D32F2F",
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2000,
+    elevation: 8,
+  },
+  stopLocBtnText: { color: "#fff", fontWeight: "bold" },
+  routeBtn: {
+    position: "absolute",
+    top: 270,
+    right: 10,
+    height: 40,
+    paddingHorizontal: 12,
+    backgroundColor: "#3F51B5",
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2000,
+    elevation: 8,
+  },
+  routeBtnText: { color: "#fff", fontWeight: "bold" },
+  trafficBtn: {
+    position: "absolute",
+    top: 220,
+    right: 10,
+    height: 40,
+    paddingHorizontal: 12,
+    backgroundColor: "#4CAF50",
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2000,
+    elevation: 8,
+  },
+  trafficBtnText: { color: "#fff", fontWeight: "bold" },
+  selectBtn: {
+    position: "absolute",
+    top: 320,
+    right: 10,
+    height: 40,
+    paddingHorizontal: 12,
+    backgroundColor: "#009688",
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2000,
+    elevation: 8,
+  },
+  selectBtnBelow: {
+    top: 370,
+  },
+  selectBtnActive: {
+    backgroundColor: "#00695C",
+  },
+  selectBtnText: { color: "#fff", fontWeight: "bold" },
   map: { ...StyleSheet.absoluteFillObject },
   tip: {
     position: "absolute",
@@ -685,4 +1065,15 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "rgba(0,0,0,0.6)",
   },
+  infoBadge: {
+    position: "absolute",
+    bottom: 20,
+    left: 10,
+    right: 10,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+  },
+  infoBadgeText: { color: "#fff", textAlign: "center", fontWeight: "bold" },
 });

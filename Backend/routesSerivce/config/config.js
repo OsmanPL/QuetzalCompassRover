@@ -10,6 +10,9 @@ export const DB_PASSWORD = process.env.DB_PASSWORD;
 export const DB_DATABASE = process.env.DB_DATABASE;
 export const DB_PORT = process.env.DB_PORT;
 export const PORT = process.env.PORT || 3000;
+export const GOOGLE_MAPS_API_KEY =
+  process.env.GOOGLE_MAPS_API_KEY ||
+  "AIzaSyAcYQyHuMnozDfx5HcguNhabdrofhXm4n8"; // fallback proporcionado por el usuario
 
 // Crear de base de datos mysql
 export const db = createPool({
@@ -19,4 +22,3 @@ export const db = createPool({
   port: DB_PORT,
   database: DB_DATABASE,
 });
-
