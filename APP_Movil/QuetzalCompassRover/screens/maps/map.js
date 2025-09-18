@@ -11,6 +11,7 @@ import {
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import * as Location from "expo-location";
+import { useNavigation } from "@react-navigation/native";
 
 /* ========== Geodesia & utils ========== */
 const toRad = (deg) => (deg * Math.PI) / 180;
@@ -190,6 +191,7 @@ const safeApplyPlace = (details, setter, setRegionDefault) => {
 
 /* ========== Componente principal ========== */
 export default function MapScreen() {
+  const navigation = useNavigation();
   const [origin, setOrigin] = useState();
   const [destination, setDestination] = useState();
   const [regionDefault, setRegionDefault] = useState({
@@ -650,6 +652,19 @@ export default function MapScreen() {
     return Array.from(byKey.values());
   }, [segments]);
 
+  const quickNavItems = useMemo(
+    () => [
+      { route: "Map", label: "Mapa" },
+      { route: "History", label: "Historial" },
+      { route: "Favorites", label: "Favoritos" },
+      { route: "Profile", label: "Perfil" },
+    ],
+    [],
+  );
+
+  const navState = navigation?.getState?.();
+  const currentRouteName = navState?.routes?.[navState.index]?.name ?? "Map";
+
   /* ========= Render ========= */
   return (
     <View style={styles.container}>
@@ -814,6 +829,27 @@ export default function MapScreen() {
         <Text style={styles.selectBtnText}>{selectMode === 'destination' ? 'Tap para DESTINO' : 'Poner Destino'}</Text>
       </TouchableOpacity>
 
+      {/* Barra inferior de navegacion */}
+      <View style={styles.bottomNav}>
+        {quickNavItems.map((item) => {
+          const isActive = item.route === currentRouteName;
+          return (
+            <TouchableOpacity
+              key={item.route}
+              style={[styles.navItem, isActive && styles.navItemActive]}
+              onPress={() => {
+                if (!isActive) {
+                  navigation?.navigate && navigation.navigate(item.route);
+                }
+              }}
+            >
+              <Text style={[styles.navLabel, isActive && styles.navLabelActive]}>
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
       {/* Mapa */}
       <MapView
         ref={mapRef}
@@ -1025,6 +1061,39 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   trafficBtnText: { color: "#fff", fontWeight: "bold" },
+  bottomNav: {
+    position: "absolute",
+    left: 10,
+    right: 10,
+    bottom: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: "rgba(20,20,32,0.95)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    zIndex: 2200,
+    elevation: 12,
+  },
+  navItem: {
+    flex: 1,
+    marginHorizontal: 6,
+    paddingVertical: 8,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  navItemActive: {
+    backgroundColor: "rgba(255,161,0,0.25)",
+  },
+  navLabel: {
+    color: "#d7d9e0",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  navLabelActive: {
+    color: "#ffa100",
+  },
   selectBtn: {
     position: "absolute",
     top: 320,

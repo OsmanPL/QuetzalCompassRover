@@ -23,18 +23,18 @@ export const db = createPool({
   database: DB_DATABASE,
 });
 
-export const crearToken = async (usuario, tipoUsuario, corr, carrito) => {
-  const token = jwt.sign({ id: usuario }, SECRET, {
+export const crearToken = ({ id, tipo, correo, nombre }) => {
+  const payload = { id, tipo };
+  if (correo) payload.correo = correo;
+  if (nombre) payload.nombre = nombre;
+  const token = jwt.sign(payload, SECRET, {
     expiresIn: "24h",
   });
   return token;
 };
 
-export const crearTokenProv = async (usuario, tipoUsuario) => {
-  const token = jwt.sign({ id: usuario, tipo: tipoUsuario }, SECRET, {
-    expiresIn: "24h",
-  });
-  return token;
+export const crearTokenProv = ({ id, tipo }) => {
+  return crearToken({ id, tipo });
 };
 
 export const validarToken = async (token) => {

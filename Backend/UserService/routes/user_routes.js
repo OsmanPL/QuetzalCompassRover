@@ -6,13 +6,14 @@ import {
   InicioSesion,
   registrarTransporte,
 } from "../services/user_service.js";
+import { authenticate } from "../middlewares/auth.js";
 
 const router = Router();
 
-router.get("/get/Usuario/:id", obtenerUsuario);
-router.post("/update/User", editarUsuario);
+router.get("/get/Usuario/:id?", authenticate, obtenerUsuario);
+router.post("/update/User", authenticate, editarUsuario);
 router.post("/Login", InicioSesion);
 router.post("/Cliente/Registrar", registrarCliente);
-router.post("/Transporte/Registrar", registrarTransporte);
+router.post("/Transporte/Registrar", authenticate, registrarTransporte);
 
 export default router;
