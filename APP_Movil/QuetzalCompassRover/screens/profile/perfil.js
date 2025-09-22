@@ -13,6 +13,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { USER_API_BASE } from "../../src/config/api.js";
 import { useAuth } from "../../src/context/AuthContext.js";
 
+import BottomNavBar from "../../src/components/BottomNavBar";
+
 const INITIAL_FORM = Object.freeze({
   nombre: "",
   apellido: "",
@@ -228,9 +230,15 @@ export default function ProfileScreen({ navigation }) {
     return value.trim().charAt(0).toUpperCase();
   }, [form.nombre, user, username]);
 
+  const handleLogout = useCallback(() => {
+    signOut();
+    navigation.reset({ index: 0, routes: [{ name: "Login" }] });
+  }, [navigation, signOut]);
+
   return (
     <View style={styles.container}>
       <ScrollView
+        style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#ffa100" />
@@ -334,14 +342,20 @@ export default function ProfileScreen({ navigation }) {
             <Text style={styles.saveButtonText}>Guardar cambios</Text>
           )}
         </TouchableOpacity>
+
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+          <Text style={styles.logoutButtonText}>Cerrar sesion</Text>
+        </TouchableOpacity>
       </ScrollView>
+      <BottomNavBar floating={false} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0f" },
-  scrollContent: { padding: 16, paddingBottom: 40 },
+  scroll: { flex: 1 },
+  scrollContent: { padding: 16, paddingBottom: 120 },
   headerCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -400,4 +414,17 @@ const styles = StyleSheet.create({
   },
   saveButtonDisabled: { opacity: 0.7 },
   saveButtonText: { color: "#000", fontWeight: "bold", fontSize: 16 },
+  logoutButton: {
+    marginTop: 18,
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#ff6b6b",
+  },
+  logoutButtonText: {
+    color: "#ff6b6b",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
 });

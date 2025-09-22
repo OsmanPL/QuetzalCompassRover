@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from "react-native";
 import { DEST_API_BASE } from "../../src/config/api.js";
 import { useAuth } from "../../src/context/AuthContext.js";
+import BottomNavBar from "../../src/components/BottomNavBar";
 
 export default function HistoryScreen({ navigation }) {
   const { token, signOut } = useAuth();
@@ -92,21 +93,25 @@ export default function HistoryScreen({ navigation }) {
   return (
     <View style={styles.container}>
       <FlatList
+        style={styles.list}
         data={items}
         keyExtractor={(it) => String(it.id)}
         renderItem={renderItem}
-        contentContainerStyle={{ padding: 12 }}
+        contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
         ListEmptyComponent={!loading ? (
           <Text style={styles.empty}>No hay historial aun.</Text>
         ) : null}
       />
+      <BottomNavBar floating={false} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0f" },
+  list: { flex: 1 },
+  listContent: { padding: 12, paddingBottom: 120 },
   card: {
     flexDirection: "row",
     alignItems: "center",

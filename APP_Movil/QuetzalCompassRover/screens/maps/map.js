@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   StyleSheet,
   View,
@@ -11,7 +11,7 @@ import {
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import * as Location from "expo-location";
-import { useNavigation } from "@react-navigation/native";
+import BottomNavBar from "../../src/components/BottomNavBar";
 
 /* ========== Geodesia & utils ========== */
 const toRad = (deg) => (deg * Math.PI) / 180;
@@ -55,36 +55,36 @@ function closestPointIndex(coords = [], p) {
 
 // Rumbo (bearing) de p1 a p2
 function bearing(p1, p2) {
-  const φ1 = toRad(p1.latitude);
-  const φ2 = toRad(p2.latitude);
-  const Δλ = toRad(p2.longitude - p1.longitude);
-  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const phi1 = toRad(p1.latitude);
+  const phi2 = toRad(p2.latitude);
+  const deltaLambda = toRad(p2.longitude - p1.longitude);
+  const y = Math.sin(deltaLambda) * Math.cos(phi2);
   const x =
-    Math.cos(φ1) * Math.sin(φ2) -
-    Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
-  const θ = Math.atan2(y, x);
-  return (toDeg(θ) + 360) % 360;
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+  const theta = Math.atan2(y, x);
+  return (toDeg(theta) + 360) % 360;
 }
 
 // Proyecta un punto a 'distMeters' desde 'p' con rumbo 'brngDeg'
 function projectPoint(p, brngDeg, distMeters) {
   const R = 6371000; // m
-  const δ = distMeters / R;
-  const θ = toRad(brngDeg);
-  const φ1 = toRad(p.latitude);
-  const λ1 = toRad(p.longitude);
+  const deltaSigma = distMeters / R;
+  const theta = toRad(brngDeg);
+  const phi1 = toRad(p.latitude);
+  const lambda1 = toRad(p.longitude);
 
-  const φ2 = Math.asin(
-    Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ)
+  const phi2 = Math.asin(
+    Math.sin(phi1) * Math.cos(deltaSigma) + Math.cos(phi1) * Math.sin(deltaSigma) * Math.cos(theta)
   );
-  const λ2 =
-    λ1 +
+  const lambda2 =
+    lambda1 +
     Math.atan2(
-      Math.sin(θ) * Math.sin(δ) * Math.cos(φ1),
-      Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2)
+      Math.sin(theta) * Math.sin(deltaSigma) * Math.cos(phi1),
+      Math.cos(deltaSigma) - Math.sin(phi1) * Math.sin(phi2)
     );
 
-  return { latitude: toDeg(φ2), longitude: ((toDeg(λ2) + 540) % 360) - 180 };
+  return { latitude: toDeg(phi2), longitude: ((toDeg(lambda2) + 540) % 360) - 180 };
 }
 
 // Rumbo aproximado de los primeros metros de una polyline
@@ -93,20 +93,21 @@ function firstHeading(coords, sample = 5) {
   if (pts.length < 2) return null;
   const a = pts[0];
   const b = pts[Math.min(sample, pts.length - 1)];
-  const φ1 = toRad(a.latitude);
-  const φ2 = toRad(b.latitude);
-  const Δλ = toRad(b.longitude - a.longitude);
-  const y = Math.sin(Δλ) * Math.cos(φ2);
-  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
-  let θ = toDeg(Math.atan2(y, x));
-  if (θ < 0) θ += 360;
-  return θ;
+  const phi1 = toRad(a.latitude);
+  const phi2 = toRad(b.latitude);
+  const deltaLambda = toRad(b.longitude - a.longitude);
+  const y = Math.sin(deltaLambda) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+  let theta = toDeg(Math.atan2(y, x));
+  if (theta < 0) theta += 360;
+  return theta;
 }
 function headingDiff(a, b) {
   if (a == null || b == null) return 0;
   let d = Math.abs(a - b);
   return d > 180 ? 360 - d : d;
 }
+
 
 /* ---------- Polyline Google ---------- */
 function decodePolyline(str) {
@@ -176,7 +177,7 @@ const getLatLngFromDetails = (details) => {
 const safeApplyPlace = (details, setter, setRegionDefault) => {
   const loc = getLatLngFromDetails(details);
   if (!loc) {
-    Alert.alert("Lugar inválido", "No se pudo obtener coordenadas de este resultado.");
+    Alert.alert("Lugar invÃ¡lido", "No se pudo obtener coordenadas de este resultado.");
     return;
   }
   setter(loc);
@@ -191,7 +192,6 @@ const safeApplyPlace = (details, setter, setRegionDefault) => {
 
 /* ========== Componente principal ========== */
 export default function MapScreen() {
-  const navigation = useNavigation();
   const [origin, setOrigin] = useState();
   const [destination, setDestination] = useState();
   const [regionDefault, setRegionDefault] = useState({
@@ -204,7 +204,7 @@ export default function MapScreen() {
   const [segments, setSegments] = useState([]);   // <- ahora viene con parada_origen/parada_destino
   const [loadingRoute, setLoadingRoute] = useState(false);
 
-  // Ubicación del usuario (opt-in)
+  // UbicaciÃ³n del usuario (opt-in)
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [hasLocationPermission, setHasLocationPermission] = useState(false);
   const [userPos, setUserPos] = useState(null);
@@ -215,12 +215,12 @@ export default function MapScreen() {
   const [routeRemainingKm, setRouteRemainingKm] = useState(null);
   const [selectMode, setSelectMode] = useState('none'); // 'none' | 'origin' | 'destination'
 
-  // Polilíneas por segmento (idx -> coordinates[])
+  // PolilÃ­neas por segmento (idx -> coordinates[])
   const [polyBySeg, setPolyBySeg] = useState({});
   const PREPEND_EXACT_ORIGIN = true;
   const APPEND_EXACT_DEST = true;
 
-  // --- Tuning de selección (para evitar nudos) ---
+  // --- Tuning de selecciÃ³n (para evitar nudos) ---
   const VIA_METERS = 35;
   const MAX_WORSE_FACTOR = 1.04;
   const MAX_EXTRA_METERS = 120;
@@ -259,10 +259,10 @@ export default function MapScreen() {
     return dict;
   }, []);
 
-  const GOOGLE_MAPS_APIKEY = "YOUR_GOOGLE_MAPS_API_KEY_HERE"; // <- Pon aquí tu API Key de Google Maps
-  const API_URL = "API_BACKEND_URL_HERE"; // <- Pon aquí la URL de tu backend
+  const GOOGLE_MAPS_APIKEY = "YOUR_GOOGLE_MAPS_API_KEY_HERE"; // <- Pon aquÃ­ tu API Key de Google Maps
+  const API_URL = "API_BACKEND_URL_HERE"; // <- Pon aquÃ­ la URL de tu backend
 
-  /* Ubicación inicial */
+  /* UbicaciÃ³n inicial */
   useEffect(() => {
     (async () => {
       try {
@@ -285,13 +285,13 @@ export default function MapScreen() {
     })();
   }, []);
 
-  // Helpers para manejo de permiso/seguimiento de ubicación
+  // Helpers para manejo de permiso/seguimiento de ubicaciÃ³n
   const ensureLocationPermission = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       const granted = status === "granted";
       setHasLocationPermission(granted);
-      if (!granted) Alert.alert("Ubicación", "Se requiere permiso para mostrar tu ubicación.");
+      if (!granted) Alert.alert("UbicaciÃ³n", "Se requiere permiso para mostrar tu ubicaciÃ³n.");
       return granted;
     } catch (e) {
       console.log("request permission error", e);
@@ -346,7 +346,7 @@ export default function MapScreen() {
       setOrigin((prev) => prev || { latitude: region.latitude, longitude: region.longitude });
       if (mapRef.current) mapRef.current.animateToRegion(region, 500);
     } catch (e) {
-      Alert.alert("Ubicación", "No se pudo obtener tu ubicación.");
+      Alert.alert("UbicaciÃ³n", "No se pudo obtener tu ubicaciÃ³n.");
     }
   };
 
@@ -360,7 +360,7 @@ export default function MapScreen() {
       !hasNumber(origin?.latitude) || !hasNumber(origin?.longitude) ||
       !hasNumber(destination?.latitude) || !hasNumber(destination?.longitude)
     ) {
-      Alert.alert("Coordenadas inválidas", "Revisa Origen y Destino.");
+      Alert.alert("Coordenadas invÃ¡lidas", "Revisa Origen y Destino.");
       return;
     }
 
@@ -392,7 +392,7 @@ export default function MapScreen() {
       );
       setSegments(cleaned);
 
-      // Extrae tiempo estimado desde tu API si está disponible
+      // Extrae tiempo estimado desde tu API si estÃ¡ disponible
       let apiMinutes = null;
       const maybeNumbers = [
         data?.tiempoMinutos,
@@ -404,7 +404,7 @@ export default function MapScreen() {
       ];
       for (const v of maybeNumbers) { if (hasNumber(v)) { apiMinutes = v; break; } }
       if (apiMinutes == null) {
-        // Intenta sumar por segmentos si traen duración por tramo
+        // Intenta sumar por segmentos si traen duraciÃ³n por tramo
         const sumSegMin = (cleaned || []).reduce((acc, s) =>
           acc + (s?.tiempoMin || s?.tiempo_min || s?.duracionMinutos || s?.duracion_minutos || 0)
         , 0);
@@ -412,7 +412,7 @@ export default function MapScreen() {
       }
       setRouteTimeMin(apiMinutes ?? null);
     } catch (e) {
-      console.error("Ruta rápida error:", e);
+      console.error("Ruta rÃ¡pida error:", e);
       Alert.alert("Ruta", "No se pudo obtener la ruta.");
     } finally {
       setLoadingRoute(false);
@@ -492,7 +492,7 @@ export default function MapScreen() {
     return () => { cancelled = true; };
   }, [segments]);
 
-  /* Ajustar cámara */
+  /* Ajustar cÃ¡mara */
   useEffect(() => {
     const vals = Object.values(polyBySeg || {});
     const allCoords = sanitizeCoordsArray(vals.flat ? vals.flat() : [].concat(...vals));
@@ -517,7 +517,7 @@ export default function MapScreen() {
     setRouteDistanceKm(total > 0 ? total / 1000 : null);
   }, [polyBySeg]);
 
-  // Distancia restante basada en polilíneas vivas (recortadas)
+  // Distancia restante basada en polilÃ­neas vivas (recortadas)
   useEffect(() => {
     const source = (livePolys && Object.keys(livePolys).length > 0) ? livePolys : polyBySeg;
     const segs = source || {};
@@ -531,7 +531,7 @@ export default function MapScreen() {
     setRouteRemainingKm(total > 0 ? total / 1000 : null);
   }, [livePolys, polyBySeg]);
 
-  // Botón: centrar en la ruta actual pintada
+  // BotÃ³n: centrar en la ruta actual pintada
   const centerOnRoute = () => {
     const source = (livePolys && Object.keys(livePolys).length > 0) ? livePolys : polyBySeg;
     const vals = Object.values(source || {});
@@ -556,7 +556,7 @@ export default function MapScreen() {
     }
   };
 
-  // Centrar el mapa cuando haya origen y destino seleccionados (aunque no haya ruta aún)
+  // Centrar el mapa cuando haya origen y destino seleccionados (aunque no haya ruta aÃºn)
   useEffect(() => {
     if (isValidCoord(origin) && isValidCoord(destination) && mapRef.current) {
       mapRef.current.fitToCoordinates([origin, destination], {
@@ -616,7 +616,7 @@ export default function MapScreen() {
     setLivePolys(updated);
   }, [userPos, polyBySeg]);
 
-  // Inicia/detiene el watcher según preferencia del usuario
+  // Inicia/detiene el watcher segÃºn preferencia del usuario
   useEffect(() => {
     (async () => {
       if (locationEnabled && hasLocationPermission) {
@@ -628,7 +628,7 @@ export default function MapScreen() {
     return () => { /* cleanup handled in stopLocationWatch */ };
   }, [locationEnabled, hasLocationPermission]);
 
-  /* ========= NUEVO: lista de PARADAS ÚNICAS (para no repetir marcadores) ========= */
+  /* ========= NUEVO: lista de PARADAS ÃšNICAS (para no repetir marcadores) ========= */
   const uniqueStops = useMemo(() => {
     const byKey = new Map();
     const add = (p) => {
@@ -651,19 +651,6 @@ export default function MapScreen() {
     });
     return Array.from(byKey.values());
   }, [segments]);
-
-  const quickNavItems = useMemo(
-    () => [
-      { route: "Map", label: "Mapa" },
-      { route: "History", label: "Historial" },
-      { route: "Favorites", label: "Favoritos" },
-      { route: "Profile", label: "Perfil" },
-    ],
-    [],
-  );
-
-  const navState = navigation?.getState?.();
-  const currentRouteName = navState?.routes?.[navState.index]?.name ?? "Map";
 
   /* ========= Render ========= */
   return (
@@ -788,11 +775,11 @@ export default function MapScreen() {
 
       {/* Botones */}
       <TouchableOpacity style={styles.searchBtn} onPress={onBuscarRutaRapida}>
-        <Text style={styles.searchBtnText}>Buscar ruta rápida</Text>
+        <Text style={styles.searchBtnText}>Buscar ruta rÃ¡pida</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.locBtn} onPress={centerOnMyLocation}>
-        <Text style={styles.locBtnText}>Mi ubicación</Text>
+        <Text style={styles.locBtnText}>Mi ubicaciÃ³n</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.routeBtn} onPress={centerOnRoute}>
@@ -803,7 +790,7 @@ export default function MapScreen() {
         style={styles.stopLocBtn}
         onPress={async () => { setLocationEnabled(false); await stopLocationWatch(); }}
       >
-        <Text style={styles.stopLocBtnText}>Detener ubicación</Text>
+        <Text style={styles.stopLocBtnText}>Detener ubicaciÃ³n</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -830,26 +817,7 @@ export default function MapScreen() {
       </TouchableOpacity>
 
       {/* Barra inferior de navegacion */}
-      <View style={styles.bottomNav}>
-        {quickNavItems.map((item) => {
-          const isActive = item.route === currentRouteName;
-          return (
-            <TouchableOpacity
-              key={item.route}
-              style={[styles.navItem, isActive && styles.navItemActive]}
-              onPress={() => {
-                if (!isActive) {
-                  navigation?.navigate && navigation.navigate(item.route);
-                }
-              }}
-            >
-              <Text style={[styles.navLabel, isActive && styles.navLabelActive]}>
-                {item.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      <BottomNavBar />
       {/* Mapa */}
       <MapView
         ref={mapRef}
@@ -919,7 +887,7 @@ export default function MapScreen() {
             );
           })}
 
-        {/* Marcadores ÚNICOS de paradas */}
+        {/* Marcadores ÃšNICOS de paradas */}
         {uniqueStops.map((p) => {
           const icon =
             (p.tipoTransporte && ICONS[p.tipoTransporte]) || ICONS.Caminar;
@@ -930,7 +898,7 @@ export default function MapScreen() {
               title={p.nombre || "Parada"}
               description={[
                 p.ruta ? `${p.ruta}` : null,
-                p.tipoTransporte ? `• ${p.tipoTransporte}` : null,
+                p.tipoTransporte ? `â€¢ ${p.tipoTransporte}` : null,
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -949,7 +917,7 @@ export default function MapScreen() {
       {(!segments || segments.length === 0) && (
         <View style={styles.tip}>
           <Text style={styles.tipText}>
-            Selecciona Origen y Destino y toca “Buscar ruta rápida”.
+            Selecciona Origen y Destino y toca â€œBuscar ruta rÃ¡pidaâ€.
           </Text>
         </View>
       )}
@@ -964,9 +932,9 @@ export default function MapScreen() {
         <View style={styles.infoBadge}>
           <Text style={styles.infoBadgeText}>
             {routeTimeMin != null ? `Tiempo estimado: ${Math.round(routeTimeMin)} min` : ''}
-            {(routeTimeMin != null && (routeDistanceKm != null || routeRemainingKm != null)) ? ' • ' : ''}
+            {(routeTimeMin != null && (routeDistanceKm != null || routeRemainingKm != null)) ? ' â€¢ ' : ''}
             {routeDistanceKm != null ? `Distancia: ${routeDistanceKm.toFixed(1)} km` : ''}
-            {(routeDistanceKm != null && routeRemainingKm != null) ? ' • ' : (routeTimeMin == null && routeRemainingKm != null && routeDistanceKm == null ? '' : '')}
+            {(routeDistanceKm != null && routeRemainingKm != null) ? ' â€¢ ' : (routeTimeMin == null && routeRemainingKm != null && routeDistanceKm == null ? '' : '')}
             {routeRemainingKm != null ? `Restante: ${routeRemainingKm.toFixed(1)} km` : ''}
           </Text>
         </View>
@@ -1061,39 +1029,6 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   trafficBtnText: { color: "#fff", fontWeight: "bold" },
-  bottomNav: {
-    position: "absolute",
-    left: 10,
-    right: 10,
-    bottom: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    backgroundColor: "rgba(20,20,32,0.95)",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    zIndex: 2200,
-    elevation: 12,
-  },
-  navItem: {
-    flex: 1,
-    marginHorizontal: 6,
-    paddingVertical: 8,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  navItemActive: {
-    backgroundColor: "rgba(255,161,0,0.25)",
-  },
-  navLabel: {
-    color: "#d7d9e0",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  navLabelActive: {
-    color: "#ffa100",
-  },
   selectBtn: {
     position: "absolute",
     top: 320,
@@ -1146,3 +1081,4 @@ const styles = StyleSheet.create({
   },
   infoBadgeText: { color: "#fff", textAlign: "center", fontWeight: "bold" },
 });
+
